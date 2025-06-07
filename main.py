@@ -10,7 +10,6 @@ from sendgrid.helpers.mail import Mail, Attachment
 from PySide6.QtWidgets import QApplication, QMessageBox, QMainWindow, QFileDialog
 from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition
 from dotenv import load_dotenv
-load_dotenv()
 
 
 # Subclass QMainWindow to customize your application's main window
@@ -268,7 +267,6 @@ class EmailSender(MainWindow):
     def __init__(self):
         super().__init__()
         # Same values for all emails
-        self.apikey = os.environ.get('SENDGRID_API_KEY')
         
         # Connect pause button
         self.ui.pause_button.clicked.connect(self.toggle_pause)
@@ -448,6 +446,8 @@ def read(excel_path):
 
 
 if __name__ == "__main__":
+    load_dotenv()
+    SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
     app = QApplication(sys.argv)
 
     window = EmailSender()
