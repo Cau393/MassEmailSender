@@ -1,5 +1,3 @@
-Of course. Here is a comprehensive README.md file for your desktop email sender application.
-
 -----
 
 # Mass Email Sender
