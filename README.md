@@ -1,5 +1,4 @@
 -----
-
 # Mass Email Sender
 
 A desktop application built with Python and PySide6 for sending mass emails, with support for personalized attachments and rich text formatting. The application uses the SendGrid API to handle email delivery efficiently and securely.

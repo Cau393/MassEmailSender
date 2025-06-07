@@ -9,7 +9,10 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Attachment
 from PySide6.QtWidgets import QApplication, QMessageBox, QMainWindow, QFileDialog
 from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition
+import concurrent.futures
+from threading import Lock
 from dotenv import load_dotenv
+
 
 
 # Subclass QMainWindow to customize your application's main window
@@ -114,12 +117,12 @@ class MainWindow(QMainWindow):
                     file.write(log_text)
 
 class EmailSenderThread(QThread):
-    """Thread for sending emails with pause/resume functionality"""
+    """Thread for sending emails with batch processing and pause/resume functionality"""
     log_signal = Signal(str, str)  # message, log_type ('certificate' or 'message')
     finished_signal = Signal()
     progress_signal = Signal(int)  # Signal to update progress bar
     
-    def __init__(self, data, sender, subject, body_template, email_type, **kwargs):
+    def __init__(self, data, sender, subject, body_template, email_type, batch_size=10, max_workers=5, **kwargs):
         super().__init__()
         self.data = data
         self.sender = sender
@@ -129,12 +132,17 @@ class EmailSenderThread(QThread):
         self.kwargs = kwargs
         self.emails_sent = 0
         self.total_emails = len(self.data)
+        self.batch_size = batch_size  # Number of emails per batch
+        self.max_workers = max_workers  # Number of concurrent threads
         
         # Pause/Resume control
         self.is_paused = False
         self.is_stopped = False
         self.mutex = QMutex()
         self.pause_condition = QWaitCondition()
+        
+        # Thread-safe counter for progress updates
+        self.progress_lock = Lock()
         
         # API key
         self.apikey = os.environ.get('SENDGRID_API_KEY')
@@ -160,104 +168,148 @@ class EmailSenderThread(QThread):
         self.pause_condition.wakeAll()
         self.mutex.unlock()
     
-    def run(self):
-        """Run the email sending process"""
-        self.emails_sent = 0
-        for name, email in self.data:
-            # Check if stopped
-            if self.is_stopped:
-                break
-            
-            # Check if paused
-            self.mutex.lock()
-            while self.is_paused and not self.is_stopped:
-                self.pause_condition.wait(self.mutex)
+    def check_pause_state(self):
+        """Check if thread should pause and wait if necessary"""
+        self.mutex.lock()
+        while self.is_paused and not self.is_stopped:
+            # Add a small delay when paused to prevent busy waiting
             self.mutex.unlock()
-            
-            # Check again if stopped after resuming
-            if self.is_stopped:
+            time.sleep(0.1)  # Small delay only during pause
+            self.mutex.lock()
+            if not self.is_stopped:
+                self.pause_condition.wait(self.mutex, 100)  # 100ms timeout
+        should_stop = self.is_stopped
+        self.mutex.unlock()
+        return should_stop
+    
+    def update_progress_safe(self, increment=1):
+        """Thread-safe progress update"""
+        with self.progress_lock:
+            self.emails_sent += increment
+            self.progress_signal.emit(self.emails_sent)
+    
+    def run(self):
+        """Run the email sending process with batch processing"""
+        self.emails_sent = 0
+        
+        # Split data into batches
+        batches = [self.data[i:i + self.batch_size] for i in range(0, len(self.data), self.batch_size)]
+        
+        for batch in batches:
+            # Check if stopped or should pause
+            if self.check_pause_state():
                 break
             
-            name = name.strip()
-            email = email.strip()
-            body = self.body_template.replace("{{nome}}", name)
+            # Process batch with concurrent execution
+            self.process_batch(batch)
             
-            if self.email_type == 'certificate':
-                cert_path = f"{self.kwargs.get('certificates_path')}/{name}.pdf"
-                success = self.send_email(email, self.subject, body, name, self.sender, certificate=cert_path)
-            else:  # message
-                att = self.kwargs.get('attachment')
-                if att:
-                    success = self.send_email(email, self.subject, body, name, self.sender, attachment=att)
-                else:
-                    success = self.send_email(email, self.subject, body, name, self.sender)
-            
-            # Update progress regardless of success/failure
-            if success:
-                self.emails_sent += 1
-            self.progress_signal.emit(self.emails_sent)
-            
-            # Small delay between emails
-            time.sleep(0.5)
+            # Check again after batch completion
+            if self.check_pause_state():
+                break
         
         self.finished_signal.emit()
     
+    def process_batch(self, batch):
+        """Process a batch of emails concurrently"""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Create futures for each email in the batch
+            futures = []
+            for name, email in batch:
+                if self.is_stopped:
+                    break
+                    
+                name = name.strip()
+                email = email.strip()
+                body = self.body_template.replace("{{nome}}", name)
+                
+                if self.email_type == 'certificate':
+                    cert_path = f"{self.kwargs.get('certificates_path')}/{name}.pdf"
+                    future = executor.submit(self.send_email, email, self.subject, body, name, self.sender, certificate=cert_path)
+                else:  # message
+                    att = self.kwargs.get('attachment')
+                    if att:
+                        future = executor.submit(self.send_email, email, self.subject, body, name, self.sender, attachment=att)
+                    else:
+                        future = executor.submit(self.send_email, email, self.subject, body, name, self.sender)
+                
+                futures.append(future)
+            
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(futures):
+                if self.is_stopped:
+                    # Cancel remaining futures
+                    for f in futures:
+                        f.cancel()
+                    break
+                
+                try:
+                    success = future.result()
+                    if success:
+                        self.update_progress_safe()
+                    else:
+                        # Still update progress for failed emails to show completion
+                        self.update_progress_safe()
+                except Exception as e:
+                    self.log_signal.emit(f"Erro no processamento em lote: {str(e)}", self.email_type)
+                    self.update_progress_safe()
+    
     def send_email(self, receiver, subject, body, name, sender, certificate=None, attachment=None):
         """Send individual email - returns True if successful, False otherwise"""
-        message = Mail(
-            from_email=sender,
-            to_emails=receiver,
-            subject=subject,
-            html_content=body
-        )
-        
-        if attachment is not None:
-            try:
-                with open(attachment, 'rb') as f:
-                    file_data = f.read()
-                
-                encoded_file = base64.b64encode(file_data).decode()
-                
-                att = Attachment(
-                    file_content=encoded_file,
-                    file_type="application/pdf",
-                    file_name=os.path.basename(attachment),
-                    disposition="attachment"
-                )
-                message.attachment = att
-            except FileNotFoundError:
-                self.log_signal.emit(f"Anexo não encontrado: {attachment}", self.email_type)
-                return False
-            except Exception as e:
-                self.log_signal.emit(f"Erro ao processar anexo para {name}: {str(e)}", self.email_type)
-                return False
-        
-        elif certificate is not None:
-            try:
-                with open(certificate, 'rb') as f:
-                    file_data = f.read()
-                
-                encoded_file = base64.b64encode(file_data).decode()
-                
-                cert = Attachment(
-                    file_content=encoded_file,
-                    file_type="application/pdf",
-                    file_name=os.path.basename(certificate),
-                    disposition="attachment"
-                )
-                message.attachment = cert
-            except FileNotFoundError:
-                self.log_signal.emit(f"Certificado não encontrado para {name}: {certificate}", self.email_type)
-                return False
-            except Exception as e:
-                self.log_signal.emit(f"Erro ao processar certificado para {name}: {str(e)}", self.email_type)
-                return False
-        
         try:
+            message = Mail(
+                from_email=sender,
+                to_emails=receiver,
+                subject=subject,
+                html_content=body
+            )
+            
+            if attachment is not None:
+                try:
+                    with open(attachment, 'rb') as f:
+                        file_data = f.read()
+                    
+                    encoded_file = base64.b64encode(file_data).decode()
+                    
+                    att = Attachment(
+                        file_content=encoded_file,
+                        file_type="application/pdf",
+                        file_name=os.path.basename(attachment),
+                        disposition="attachment"
+                    )
+                    message.attachment = att
+                except FileNotFoundError:
+                    self.log_signal.emit(f"Anexo não encontrado: {attachment}", self.email_type)
+                    return False
+                except Exception as e:
+                    self.log_signal.emit(f"Erro ao processar anexo para {name}: {str(e)}", self.email_type)
+                    return False
+            
+            elif certificate is not None:
+                try:
+                    with open(certificate, 'rb') as f:
+                        file_data = f.read()
+                    
+                    encoded_file = base64.b64encode(file_data).decode()
+                    
+                    cert = Attachment(
+                        file_content=encoded_file,
+                        file_type="application/pdf",
+                        file_name=os.path.basename(certificate),
+                        disposition="attachment"
+                    )
+                    message.attachment = cert
+                except FileNotFoundError:
+                    self.log_signal.emit(f"Certificado não encontrado para {name}: {certificate}", self.email_type)
+                    return False
+                except Exception as e:
+                    self.log_signal.emit(f"Erro ao processar certificado para {name}: {str(e)}", self.email_type)
+                    return False
+            
             sg = SendGridAPIClient(api_key=self.apikey)
             response = sg.send(message)
             self.log_signal.emit(f"Email enviado para {name} ({receiver}). Response: {response.status_code}", self.email_type)
             return True
+            
         except Exception as e:
             self.log_signal.emit(f"Erro ao enviar email para {name} ({receiver}): {str(e)}", self.email_type)
             return False
@@ -267,7 +319,7 @@ class EmailSender(MainWindow):
     def __init__(self):
         super().__init__()
         # Same values for all emails
-        
+        self.apikey = os.environ.get('SENDGRID_API_KEY')
         # Connect pause button
         self.ui.pause_button.clicked.connect(self.toggle_pause)
         
@@ -329,9 +381,12 @@ class EmailSender(MainWindow):
             self.certificate_thread.stop()
             self.certificate_thread.wait()
         
-        # Create and start new thread
+        # Create and start new thread with batch processing
+        # Adjust batch_size and max_workers based on your needs and SendGrid limits
         self.certificate_thread = EmailSenderThread(
             data, sender, subject, body_template, 'certificate',
+            batch_size=20,  # Process 20 emails per batch
+            max_workers=8,  # Use 8 concurrent threads
             certificates_path=certificates_path
         )
         self.certificate_thread.log_signal.connect(self.handle_log)
@@ -371,9 +426,11 @@ class EmailSender(MainWindow):
             self.message_thread.stop()
             self.message_thread.wait()
         
-        # Create and start new thread
+        # Create and start new thread with batch processing
         self.message_thread = EmailSenderThread(
             data, sender, subject, body_template, 'message',
+            batch_size=20,  # Process 20 emails per batch
+            max_workers=8,  # Use 8 concurrent threads
             attachment=att
         )
         self.message_thread.log_signal.connect(self.handle_log)
