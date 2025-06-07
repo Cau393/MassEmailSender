@@ -1,5 +1,0 @@
-{
-    "retry_count": 3,
-    "retry_delay": 2,
-    "max_workers": 3
-}
