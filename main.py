@@ -9,6 +9,8 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Attachment
 from PySide6.QtWidgets import QApplication, QMessageBox, QMainWindow, QFileDialog
 from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition
+from dotenv import load_dotenv
+load_dotenv()
 
 
 # Subclass QMainWindow to customize your application's main window
