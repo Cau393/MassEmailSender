@@ -3,6 +3,7 @@ import sys
 import os
 import re
 import time
+import requests
 import email_sender_design
 import pandas as pd
 from sendgrid import SendGridAPIClient
@@ -12,8 +13,6 @@ from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition
 import concurrent.futures
 from threading import Lock
 from dotenv import load_dotenv
-import requests
-from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QFontDatabase
 
 
