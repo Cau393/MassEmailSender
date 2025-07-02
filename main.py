@@ -12,7 +12,38 @@ from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition
 import concurrent.futures
 from threading import Lock
 from dotenv import load_dotenv
+import requests
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QFontDatabase
 
+
+class FontDownloaderThread(QThread):
+    """A thread to download a file without freezing the UI."""
+    download_finished = Signal(str)  # Signal to emit the path of the downloaded file
+    download_failed = Signal(str)    # Signal to emit an error message
+
+    def __init__(self, url, save_path):
+        super().__init__()
+        self.url = url
+        self.save_path = save_path
+
+    def run(self):
+        """The logic that runs in the separate thread."""
+        try:
+            # Download the file
+            response = requests.get(self.url)
+            response.raise_for_status()  # Raise an error for bad responses (4xx or 5xx)
+
+            # Save the file to disk
+            with open(self.save_path, 'wb') as f:
+                f.write(response.content)
+
+            # Emit the success signal with the file path
+            self.download_finished.emit(self.save_path)
+
+        except Exception as e:
+            # Emit the failure signal with the error
+            self.download_failed.emit(str(e))
 
 
 # Subclass QMainWindow to customize your application's main window
@@ -115,6 +146,34 @@ class MainWindow(QMainWindow):
             if log_file_path:
                 with open(log_file_path, 'w') as file:
                     file.write(log_text)
+    # In your MainWindow class
+
+    def check_and_download_font(self):
+        font_url = "https://raw.githubusercontent.com/google/fonts/main/ofl/roboto/Roboto-Regular.ttf"
+        self.font_save_path = "Roboto-Regular.ttf"
+
+        # Create the thread
+        self.downloader = FontDownloaderThread(font_url, self.font_save_path)
+
+        # Connect signals to slots
+        self.downloader.download_finished.connect(self.on_font_downloaded)
+        self.downloader.download_failed.connect(self.on_download_failed)
+
+        # Start the download
+        self.downloader.start()
+        print("Font download started in the background...")
+
+    def on_font_downloaded(self, font_path):
+        """This function is called when the download_finished signal is emitted."""
+        print(f"Download complete: {font_path}")
+        # Now, load the font into your application's font database
+        QFontDatabase.addApplicationFont(font_path)
+        # You can now use "Roboto" in your stylesheets
+
+    def on_download_failed(self, error_message):
+        """This function is called when the download_failed signal is emitted."""
+        print(f"Error downloading font: {error_message}")
+        # Optionally, show a QMessageBox to the user
 
 class EmailSenderThread(QThread):
     """Thread for sending emails with batch processing and pause/resume functionality"""
@@ -218,7 +277,7 @@ class EmailSenderThread(QThread):
                 if self.is_stopped:
                     break
                     
-                name = name.strip()
+                name = str(name).strip()
                 email = email.strip()
                 body = self.body_template.replace("{{nome}}", name)
                 
@@ -483,7 +542,7 @@ class EmailSender(MainWindow):
 
 # Read Excel File and Get Names and Emails and send them
 def read(excel_path):
-    df = pd.read_excel(excel_path)
+    df = pd.read_excel(excel_path, dtype=str)
     
     # Simple regex to find name and email columns
     name_col = None
