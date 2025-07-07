@@ -54,7 +54,7 @@ source venv/bin/activate
 Install all the required Python libraries using pip:
 
 ```bash
-pip install requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 4. Create the `.env` File
