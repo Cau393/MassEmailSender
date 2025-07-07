@@ -106,7 +106,8 @@ class MainWindow(QMainWindow):
             "",
             "PDF Files (*.pdf);;All Files (*)"
         )
-        if file_path:
+        if file_path and file_path != self.att: # Check if the file is new
+            self.att = file_path
             email_sender_design.values_instance.att = file_path
             self.att = file_path
             self.ui.log_message.appendPlainText(f"PDF Selecionado: {file_path}")
@@ -117,11 +118,13 @@ class MainWindow(QMainWindow):
             "Selecione a pasta com os certificados",
             ""
         )
-        if dir_path:
-            email_sender_design.values_instance.certificates_path = dir_path
+        if dir_path and dir_path != self.certificates_path: # Check if the path is new
             self.certificates_path = dir_path
-            self.ui.log_certificate.appendPlainText(f"Pasta de certificados selecionada: {dir_path}")
-    
+            email_sender_design.values_instance.certificates_path = dir_path
+
+            # Always a 'certificate' type log, so call handle_log
+            self.handle_log(f"Pasta de certificados selecionada: {dir_path}", 'certificate')
+
     def send_based_on_active_tab(self):
         """Send emails based on active tab"""
         current_tab = self.ui.tabWidget.currentIndex()
@@ -130,7 +133,7 @@ class MainWindow(QMainWindow):
             EmailSender.send_all_certificate(self)
         elif current_tab == 1:  # Message tab
             EmailSender.send_all_message(self)
-        
+
     def save_log(self):
         """Save logs to a file"""
         current_tab = self.ui.tabWidget.currentIndex()
@@ -386,16 +389,42 @@ class EmailSender(MainWindow):
         self.certificate_paused = False
         self.message_paused = False
         self.current_active_thread = None
-    
+
+        # Use a set to track logged messages for efficiency
+        self.logged_messages = set()
+
+        # 1. Create an instance of our event filter
+        self.tab_filter = TabKeyFilter(self)
+
+        # 2. Install the filter on all relevant text widgets
+        text_widgets = [
+            self.ui.sender_email_certificate,
+            self.ui.subject_certificate,
+            self.ui.email_body_certificate,
+            self.ui.sender_email_message,
+            self.ui.subject_message,
+            self.ui.email_body_message
+        ]
+
+        for widget in text_widgets:
+            widget.installEventFilter(self.tab_filter)
+
+        default_font = QFont()
+        default_font.setFamily('Segoe UI')
+        default_font.setPointSize(11)
+
+        self.ui.email_body_certificate.setFont(default_font)
+        self.ui.email_body_message.setFont(default_font)
+
     def update_progress(self, value):
         """Update progress bar with the current value"""
         self.ui.progressBar.setValue(value)
-    
+
     def toggle_pause(self):
         """Toggle pause/resume for the currently active thread"""
         if self.current_active_thread and self.current_active_thread.isRunning():
             current_tab = self.ui.tabWidget.currentIndex()
-            
+
             if current_tab == 0:  # Certificate tab
                 if self.certificate_paused:
                     self.current_active_thread.resume()
@@ -503,14 +532,21 @@ class EmailSender(MainWindow):
         # Reset pause state
         self.message_paused = False
         self.ui.pause_button.setText("Pausar Envio")
-    
+
     def handle_log(self, message, log_type):
         """Handle log messages from email sending threads"""
         if log_type == 'certificate':
             self.ui.log_certificate.appendPlainText(message)
         else:
-            self.ui.log_message.appendPlainText(message)
-    
+            # This handles all other messages, like "Email enviado para..."
+            # It simply appends them without any complex looping.
+            if log_type == 'certificate':
+                self.ui.log_certificate.appendPlainText(message)
+            elif log_type == 'message':
+                self.ui.log_message.appendPlainText(message)
+        # Add the new message to the set to prevent future duplicates
+        self.logged_messages.add(message)
+
     def on_certificate_finished(self):
         """Handle certificate email sending completion"""
         self.certificate_paused = False

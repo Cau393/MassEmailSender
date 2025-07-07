@@ -12,10 +12,14 @@ class Ui_appwindow(object):
         appwindow.setEnabled(True)
         appwindow.resize(681, 703)
         appwindow.setWindowTitle(u"CDPI")
-        icon = QIcon(QIcon.fromTheme(QIcon.ThemeIcon.MailMarkUnread))
+        icon = QIcon('email_icon.ico')
         appwindow.setWindowIcon(icon)
         appwindow.setStyleSheet(u"")
-        
+
+        # This sets the icon for the window's title bar and the taskbar when running
+        icon = QIcon('email_icon.ico')
+        appwindow.setWindowIcon(icon)
+
         self.tabWidget = QTabWidget(appwindow)
         self.tabWidget.setObjectName(u"tabWidget")
         self.tabWidget.setEnabled(True)
@@ -375,3 +379,4 @@ class Values():
         self.att = None
         self.certificates_path = None
         self.excel_path = None
+
