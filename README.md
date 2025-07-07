@@ -3,12 +3,12 @@
 
 A desktop application built with Python and PySide6 for sending mass emails, with support for personalized attachments and rich text formatting. The application uses the SendGrid API to handle email delivery efficiently and securely.
 
- \#\# Features
+## Features
 
   - **Two Sending Modes:**
       - **Certificate Mode:** Send personalized PDF certificates to a list of recipients. The application matches recipient names from an Excel file to PDF certificate filenames.
       - **Message Mode:** Send a general message with a single, common attachment to a list of recipients from an Excel file.
-  - **Rich Text Editor:** Compose emails with **bold**, *italic*, and \<u\>underline\</u\> formatting.
+  - **Rich Text Editor:** Compose emails with **bold**, *italic*, and <u>underline</u> formatting.
   - **Asynchronous Sending:** Emails are sent in a separate thread, so the application remains responsive.
   - **Pause/Resume/Stop Functionality:** Control the email sending process at any time.
   - **Real-time Logging:** View the status of each email being sent in a log window.
@@ -16,6 +16,7 @@ A desktop application built with Python and PySide6 for sending mass emails, wit
   - **Secure API Key Handling:** Uses a `.env` file to keep your SendGrid API key secure and out of the source code.
   - **Easy File Selection:** User-friendly dialogs to select Excel files, attachment PDFs, and certificate folders.
   - **Log Saving:** Option to save the detailed sending log to a `.txt` file for record-keeping.
+  - **Smart Log Replacement:** When you select a new Excel file, certificate folder, or attachment, the log window will **replace** the previous line for that selection, keeping the log clean and up-to-date.
 
 ## Requirements
 
@@ -24,16 +25,16 @@ A desktop application built with Python and PySide6 for sending mass emails, wit
 
 ## How to Set Up and Run
 
-### 1\. Clone the Repository
+### 1. Clone the Repository
 
 First, clone this repository to your local machine:
 
 ```bash
-git clone <your-repository-url>
-cd <repository-folder>
+git clone https://github.com/Cau393/MassEmailSender.git
+cd MassEmailSender
 ```
 
-### 2\. Create a Virtual Environment
+### 2. Create a Virtual Environment
 
 It is highly recommended to use a virtual environment to manage project dependencies.
 
@@ -48,15 +49,15 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### 3\. Install Dependencies
+### 3. Install Dependencies
 
 Install all the required Python libraries using pip:
 
 ```bash
-pip install PySide6 pandas python-dotenv sendgrid
+pip install requirements.txt
 ```
 
-### 4\. Create the `.env` File
+### 4. Create the `.env` File
 
 This is a crucial step for storing your SendGrid API key securely.
 
@@ -70,7 +71,7 @@ This is a crucial step for storing your SendGrid API key securely.
 
     Replace `YOUR_SENDGRID_API_KEY_GOES_HERE` with the actual key you generated from your SendGrid account.
 
-### 5\. Run the Application
+### 5. Run the Application
 
 Once the setup is complete, you can run the application with the following command:
 
@@ -110,4 +111,7 @@ python main.py
 
   - **Pause/Resume:** Click the **"Pausar Envio"** button to pause the process. The button text will change to **"Retomar Envio"**; click it again to resume.
   - **Log:** Watch the log window for real-time updates on which emails have been sent and if any errors occurred.
+  - **Smart Log Replacement:** When you select a new Excel file, certificate folder, or attachment, the log window will **replace** the previous line for that selection, so you always see the latest file/folder in the log.
   - **Save Log:** After the process is complete (or at any time), click the **"Salvar Log"** button to save the contents of the log window to a text file.
+
+-----
