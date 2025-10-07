@@ -16,7 +16,7 @@ class Ui_appwindow(object):
             QWidget {
                 background-color: #2c3e50;
                 color: #ecf0f1;
-                font-family: 'Segoe UI';
+                font-family: "Helvetica", sans-serif;
                 font-size: 11pt;
             }
             QTabWidget::pane {

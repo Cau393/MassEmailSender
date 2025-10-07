@@ -9,8 +9,9 @@ import aiofiles
 import requests
 import email_sender_design
 import pandas as pd
+from collections import OrderedDict
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, From
+from sendgrid.helpers.mail import Mail, Email, Attachment, From
 from PySide6.QtWidgets import QApplication, QMessageBox, QMainWindow, QFileDialog
 from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition, QObject, QEvent, Qt
 from PySide6.QtGui import QFontDatabase, QFont
@@ -19,6 +20,7 @@ from threading import Lock
 from dotenv import load_dotenv
 from functools import lru_cache
 import logging
+import gc
 from dataclasses import dataclass
 from typing import Optional
 from queue import Queue
@@ -65,39 +67,47 @@ class FontDownloaderThread(QThread):
             session.close()
 
 class FileCache:
-    """Cache for file contents to avoid repeated file reads"""
     def __init__(self, max_size_mb=100):
-        self.cache = {}
+        self.cache = OrderedDict()
         self.max_size_bytes = max_size_mb * 1024 * 1024
         self.current_size = 0
-        self.access_order = []
 
     def get(self, file_path):
         if file_path in self.cache:
-            # Move to end (most recently used)
-            self.access_order.remove(file_path)
-            self.access_order.append(file_path)
+            self.cache.move_to_end(file_path)
             return self.cache[file_path]
         return None
 
     def put(self, file_path, content):
-        if file_path in self.cache:
-            return
-
         content_size = len(content)
-        
-        # Remove old items if cache would be too large
-        while self.current_size + content_size > self.max_size_bytes and self.access_order:
-            oldest = self.access_order.pop(0)
-            old_content = self.cache.pop(oldest)
+        # Evict oldest files until there's space
+        while self.current_size + content_size > self.max_size_bytes and self.cache:
+            old_path, old_content = self.cache.popitem(last=False)
             self.current_size -= len(old_content)
-
         self.cache[file_path] = content
         self.current_size += content_size
-        self.access_order.append(file_path)
 
 # Global file cache instance
 file_cache = FileCache()
+
+class MemoryCleaner:
+    """Utility to help prevent memory leaks by clearing caches and shutting down threads."""
+    
+    @staticmethod
+    def clean_all():
+        # Clear the file cache
+        global file_cache
+        if file_cache and hasattr(file_cache, "cache"):
+            file_cache.cache.clear()
+            file_cache.current_size = 0
+
+        # Clear the Excel read cache
+        read.cache_clear()
+
+        # Run Python garbage collector
+        gc.collect()
+
+        logger.info("🧹 Memory cleanup completed.")
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -227,7 +237,7 @@ class OptimizedEmailSenderThread(QThread):
     finished_signal = Signal()
     progress_signal = Signal(int)
     
-    def __init__(self, data, sender, subject, body_template, email_type, 
+    def __init__(self, data, sender, sender_name, subject, body_template, email_type, 
                  batch_size=50, max_workers=20, rate_limit_per_second=100, **kwargs):
         super().__init__()
         self.data = data
@@ -417,10 +427,10 @@ class OptimizedEmailSenderThread(QThread):
     async def _send_via_sendgrid_async(self, email_data: EmailData):
         """Send email via SendGrid with optimized file handling"""
         try:
-            from_object = From(email=self.sender, name=self.sender_name)
+            from_object = Email(email=self.sender, name=self.sender_name)
             
             message = Mail(
-                from_email=self.sender,
+                from_email=from_object,
                 to_emails=email_data.email,
                 subject=self.subject,
                 html_content=email_data.body
@@ -494,9 +504,11 @@ class EmailSender(MainWindow):
 
         # 2. Install the filter on all relevant text widgets
         text_widgets = [
+            self.ui.sender_name_certificate,
             self.ui.sender_email_certificate,
             self.ui.subject_certificate,
             self.ui.email_body_certificate,
+            self.ui.sender_name_message,
             self.ui.sender_email_message,
             self.ui.subject_message,
             self.ui.email_body_message
@@ -539,6 +551,7 @@ class EmailSender(MainWindow):
                     self.ui.pause_button.setText("Retomar Envio")
     
     def send_all_certificate(self):
+        sender_name = self.ui.sender_name_certificate.toPlainText().strip()
         sender = self.ui.sender_email_certificate.toPlainText().strip()
         subject = self.ui.subject_certificate.toPlainText().strip()
         body_template = self.ui.email_body_certificate.toHtml()
@@ -563,7 +576,7 @@ class EmailSender(MainWindow):
         
         # Use optimized thread with higher concurrency
         self.certificate_thread = OptimizedEmailSenderThread(
-            data, sender, subject, body_template, 'certificate',
+            data, sender, sender_name, subject, body_template, 'certificate',
             batch_size=100,  # Larger batches
             max_workers=50,  # More workers
             rate_limit_per_second=200,  # Higher rate limit
@@ -579,6 +592,7 @@ class EmailSender(MainWindow):
         self.ui.pause_button.setText("Pausar Envio")
     
     def send_all_message(self):
+        sender_name = self.ui.sender_name_message.toPlainText().strip()
         sender = self.ui.sender_email_message.toPlainText().strip()
         subject = self.ui.subject_message.toPlainText().strip()
         body_template = self.ui.email_body_message.toHtml()
@@ -603,7 +617,7 @@ class EmailSender(MainWindow):
 
         # Use optimized thread with higher concurrency
         self.message_thread = OptimizedEmailSenderThread(
-            data, sender, subject, body_template, 'message',
+            data, sender, sender_name, subject, body_template, 'message',
             batch_size=100,  # Larger batches
             max_workers=50,  # More workers  
             rate_limit_per_second=200,  # Higher rate limit
@@ -666,6 +680,7 @@ class EmailSender(MainWindow):
         self.ui.pause_button.setText("Pausar Envio")
         self.ui.log_certificate.appendPlainText("Envio de certificados concluído!")
         self.show_completion_dialog()
+        MemoryCleaner.clean_all()
     
     def on_message_finished(self):
         self.message_paused = False
@@ -673,7 +688,8 @@ class EmailSender(MainWindow):
         self.ui.pause_button.setText("Pausar Envio")
         self.ui.log_message.appendPlainText("Envio de mensagens concluído!")
         self.show_completion_dialog()
-    
+        MemoryCleaner.clean_all()
+
     def show_completion_dialog(self):
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Envio Finalizado")
